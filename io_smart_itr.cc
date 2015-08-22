@@ -56,7 +56,7 @@ public:
 				throw std::system_error(errno, std::system_category());
 			}
 
-			n_elms = sbuf.st_size;
+			n_elms = sbuf.st_size / sizeof(T);
 
 			prefill();
 		}
@@ -163,12 +163,12 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 4);
+	io_smart_mmap<uint16_t> m = io_smart_mmap<uint16_t>(argv[1], 4);
 
 	for (int j=0; j<5; j++) {
 		printf("Iteration %d\n", j);
 
-		for (io_smart_mmap<char>::iterator it = m.begin();
+		for (io_smart_mmap<uint16_t>::iterator it = m.begin();
 		     it != m.end();
 		     it++)
 		{
