@@ -12,6 +12,7 @@
 #include <unistd.h> /* pread */
 #include <semaphore.h>
 #include <pthread.h>
+#include <assert.h>
 
 #include "circ.h"
 #include "dbprintf.h"
@@ -28,8 +29,9 @@ struct pread_req {
 	int fd;
 	size_t size;
 	off_t offset;
-	void *buf;
-	sem_t *sem;
+	pthread_mutex_t *resp_q_lock;
+	circ_buf_t *resp_q;
+	pthread_cond_t *resp_q_cond;
 	int exit_flag;
 };
 
@@ -43,6 +45,9 @@ static void *io_thread(void *arg)
 
 	struct pread_req req;
 	int cnt = 0;
+
+	static void *buf = 0;
+	static size_t buf_size = 0;
 
 	for (;;) {
 		pthread_mutex_lock(req_queue_lock);
@@ -70,16 +75,32 @@ static void *io_thread(void *arg)
 
 		fflush(stdout);
 #endif
+		if (req.size > buf_size) {
+			buf = realloc(buf, req.size);
+		}
 
-		if (pread(req.fd, req.buf, req.size, req.offset) < 0) {
+		if (!buf) {
+			perror("realloc");
+			abort();
+		}
+
+		if (pread(req.fd, buf, req.size, req.offset) < 0) {
 			perror("pread");
 			abort();
 		}
 
-		if (req.sem) {
-			sem_post(req.sem);
+		pthread_mutex_lock(req.resp_q_lock);
+
+		if (circ_enq(req.resp_q, buf) < 0) {
+			perror("circ_enq");
+			abort();
 		}
+
+		pthread_cond_signal(req.resp_q_cond);
+		pthread_mutex_unlock(req.resp_q_lock);
 	}
+
+	free(buf);
 
 	fprintf(stdout, "io thread exit\n");
 	pthread_exit(NULL);
@@ -101,6 +122,9 @@ protected:
 
 	int n_elms;
 	circ_buf_t q;
+	pthread_cond_t q_cond;
+	pthread_mutex_t q_lock;
+
 	int fd = -1;
 	int head_idx = 0;
 	int tail_idx = 0;
@@ -126,6 +150,13 @@ public:
 			}
 
 			if (circ_init(&q, cache_capacity, sizeof(T)) < 0) {
+				throw std::system_error(errno, std::system_category());
+			}
+
+			if (pthread_cond_init(&q_cond, NULL)) {
+				throw std::system_error(errno, std::system_category());
+			}
+			if (pthread_mutex_init(&q_lock, NULL)) {
 				throw std::system_error(errno, std::system_category());
 			}
 
@@ -158,10 +189,22 @@ public:
 			{
 				if (cnt < m->n_elms - m->cache_overlap) {
 					T c;
-
+#if 0
 					if (circ_deq(&m->q, &c) < 0) {
 						throw std::system_error(errno, std::system_category());
 					}
+#else
+					m->wait_on_q();
+
+					pthread_mutex_lock(&m->q_lock);
+
+					if (circ_deq(&m->q, &c) < 0) {
+						printf("bogus!\n");
+						abort();
+					}
+
+					pthread_mutex_unlock(&m->q_lock);
+#endif
 					//dbprintf("dequed %c\n", &c[0]);
 					m->head_idx = (m->head_idx + 1) % m->n_elms;
 					dbprintf("head_idx = %d\n", m->head_idx);
@@ -173,6 +216,7 @@ public:
 
 				iterator it(cnt, m);
 				cnt++;
+				printf("cnt = %d\n", cnt);
 				return it;
 			}
 		bool operator==(const iterator &it)
@@ -185,10 +229,22 @@ public:
 			}
 		T operator *()
 			{
+				m->wait_on_q(m->head_offset + 1);
+
+#if 0
+				printf("about to peek, queue cnt is %d head_offset is %d\n",
+				       m->q.count, m->head_offset);
+#endif
+
+				pthread_mutex_lock(&m->q_lock);
+
 				T *p_c = (T *) circ_peek(&m->q, m->head_offset);
 
 				dbprintf("read elm %2d, c = %c, cnt = %d\n", (m->head_idx + m->head_offset), *p_c, m->q.count);
-				return *p_c;
+				T c = *p_c;
+				pthread_mutex_unlock(&m->q_lock);
+
+				return c;
 			}
 		inline int idx()
 			{
@@ -207,24 +263,35 @@ public:
 			dbprintf("Prefilled\n");
 			printq();
 		}
+	void wait_on_q(int count = 1)
+		{
+			pthread_mutex_lock(&q_lock);
+			while (circ_cnt(&q) < count) {
+				pthread_cond_wait(&q_cond, &q_lock);
+			}
+			assert(circ_cnt(&q) >= count);
+			pthread_mutex_unlock(&q_lock);
+		}
 	void fill_next()
 		{
-			T c;
 #if 0
+			T c;
+
 			if (pread(fd, &c, 1 * sizeof(T), tail_idx * sizeof(T)) < 0) {
 				throw std::system_error(errno, std::system_category());
 			}
-#else
-			sem_t sem;
-			sem_init(&sem, 0, 0);
 
+			read_cnt++;
+			circ_enq(&q, &c);
+#else
 			struct pread_req req;
 			req.fd = fd;
-			req.buf = &c;
 			req.size = 1 * sizeof(T);
 			req.offset = tail_idx * sizeof(T);
-			req.sem = &sem;
 			req.exit_flag = 0;
+			req.resp_q = &q;
+			req.resp_q_lock = &q_lock;
+			req.resp_q_cond = &q_cond;
 
 			pthread_mutex_lock(io_q_lock);
 
@@ -235,10 +302,9 @@ public:
 
 			pthread_cond_signal(io_q_cond);
 			pthread_mutex_unlock(io_q_lock);
-			sem_wait(&sem);
+			//sem_wait(&sem);
 #endif
 			read_cnt++;
-			circ_enq(&q, &c);
 			tail_idx = (tail_idx + 1) % n_elms;
 		}
 	iterator begin()
@@ -292,10 +358,10 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "error creating thread\n");
 	}
 
-	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 4,
-						&req_queue, &req_queue_lock, &req_condition);
+	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 40,
+						    &req_queue, &req_queue_lock, &req_condition);
 
-	for (int j=0; j<5; j++) {
+	for (int j=0; j<7; j++) {
 		printf("Iteration %d\n", j);
 
 		for (io_smart_mmap<char>::iterator it = m.begin();
