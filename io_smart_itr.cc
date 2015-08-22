@@ -12,6 +12,9 @@
 #include <unistd.h> /* pread */
 
 #include "circ.h"
+#include "dbprintf.h"
+
+int debug = 0;
 
 class io_smart_mmap
 {
@@ -23,10 +26,18 @@ protected:
 	int head_idx = 0;
 	int tail_idx = 0;
 	int head_offset = 0;
+	/* How many elements to keep in the cache
+	 * across iterations.
+	 */
+	int cache_overlap;
 
 public:
+	int read_cnt = 0;
+
 	io_smart_mmap(const char *path, size_t cache_capacity)
-		: cache_capacity(cache_capacity)
+		: cache_capacity(cache_capacity),
+		  cache_overlap(cache_capacity)
+		  
 		{
 			fd = open(path, O_RDONLY);
 			if (fd < 0) {
@@ -64,15 +75,15 @@ public:
 			}
 		const iterator operator++(int) /* postincrement */
 			{
-				if (cnt < m->n_elms - m->cache_capacity) {
+				if (cnt < m->n_elms - m->cache_overlap) {
 					char c;
 
 					if (circ_deq(&m->q, &c) < 0) {
 						throw std::system_error(errno, std::system_category());
 					}
-					printf("dequed %c\n", c);
+					dbprintf("dequed %c\n", c);
 					m->head_idx = (m->head_idx + 1) % m->n_elms;
-					printf("head_idx = %d\n", m->head_idx);
+					dbprintf("head_idx = %d\n", m->head_idx);
 					m->fill_next();
 				}
 				else {
@@ -95,8 +106,12 @@ public:
 			{
 				char *p_c = (char *) circ_peek(&m->q, m->head_offset);
 
-				printf("read elm %2d, c = %c, cnt = %d\n", (m->head_idx + m->head_offset), *p_c, m->q.count);
+				dbprintf("read elm %2d, c = %c, cnt = %d\n", (m->head_idx + m->head_offset), *p_c, m->q.count);
 				return *p_c;
+			}
+		inline int idx()
+			{
+				return m->head_idx + m->head_offset;
 			}
 	private:
 		int cnt;
@@ -108,7 +123,7 @@ public:
 				fill_next();
 			}
 
-			printf("Prefilled\n");
+			dbprintf("Prefilled\n");
 			printq();
 		}
 	void fill_next()
@@ -117,6 +132,7 @@ public:
 			if (pread(fd, &c, 1 * sizeof(char), tail_idx * sizeof(char)) < 0) {
 				throw std::system_error(errno, std::system_category());
 			}
+			read_cnt++;
 			circ_enq(&q, &c);
 			tail_idx = (tail_idx + 1) % n_elms;
 		}
@@ -133,7 +149,7 @@ public:
 		{
 			for (size_t i=0; i<q.count; i++) {
 				char *p_c = (char *) circ_peek(&q, i);
-				printf("peek %2lu %c\n", i, *p_c);
+				dbprintf("peek %2lu %c\n", i, *p_c);
 			}
 		}
 };
@@ -155,13 +171,14 @@ int main(int argc, char *argv[])
 		     it != m.end();
 		     it++)
 		{
-			//std::cout << *it << std::endl;
-			*it;
+			std::cout << *it << std::endl;
 		}
 
 		m.printq();
 		printf("\n");
 	}
+
+	printf("read_cnt = %d\n", m.read_cnt);
 
 	return 0;
 }
