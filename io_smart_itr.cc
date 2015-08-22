@@ -16,20 +16,23 @@
 
 int debug = 0;
 
+template <typename T>
 class io_smart_mmap
 {
 protected:
-	int n_elms, cache_capacity;
+	int cache_capacity;
+	/* How many elements to keep in the cache
+	 * across iterations.
+	 */
+	int cache_overlap;
+
+	int n_elms;
 	circ_buf_t q;
 	circ_buf_t io_q;
 	int fd = -1;
 	int head_idx = 0;
 	int tail_idx = 0;
 	int head_offset = 0;
-	/* How many elements to keep in the cache
-	 * across iterations.
-	 */
-	int cache_overlap;
 
 public:
 	int read_cnt = 0;
@@ -37,14 +40,13 @@ public:
 	io_smart_mmap(const char *path, size_t cache_capacity, size_t cache_overlap = 0)
 		: cache_capacity(cache_capacity),
 		  cache_overlap(cache_capacity - cache_overlap)
-		  
 		{
 			fd = open(path, O_RDONLY);
 			if (fd < 0) {
 				throw std::system_error(errno, std::system_category());
 			}
 
-			if (circ_init(&q, cache_capacity, sizeof(char)) < 0) {
+			if (circ_init(&q, cache_capacity, sizeof(T)) < 0) {
 				throw std::system_error(errno, std::system_category());
 			}
 
@@ -76,12 +78,12 @@ public:
 		const iterator operator++(int) /* postincrement */
 			{
 				if (cnt < m->n_elms - m->cache_overlap) {
-					char c;
+					T c;
 
 					if (circ_deq(&m->q, &c) < 0) {
 						throw std::system_error(errno, std::system_category());
 					}
-					dbprintf("dequed %c\n", c);
+					//dbprintf("dequed %c\n", &c[0]);
 					m->head_idx = (m->head_idx + 1) % m->n_elms;
 					dbprintf("head_idx = %d\n", m->head_idx);
 					m->fill_next();
@@ -102,9 +104,9 @@ public:
 			{
 				return (cnt != it.cnt);
 			}
-		char operator *()
+		T operator *()
 			{
-				char *p_c = (char *) circ_peek(&m->q, m->head_offset);
+				T *p_c = (T *) circ_peek(&m->q, m->head_offset);
 
 				dbprintf("read elm %2d, c = %c, cnt = %d\n", (m->head_idx + m->head_offset), *p_c, m->q.count);
 				return *p_c;
@@ -128,8 +130,8 @@ public:
 		}
 	void fill_next()
 		{
-			char c;
-			if (pread(fd, &c, 1 * sizeof(char), tail_idx * sizeof(char)) < 0) {
+			T c;
+			if (pread(fd, &c, 1 * sizeof(T), tail_idx * sizeof(T)) < 0) {
 				throw std::system_error(errno, std::system_category());
 			}
 			read_cnt++;
@@ -148,7 +150,7 @@ public:
 	void printq()
 		{
 			for (size_t i=0; i<q.count; i++) {
-				char *p_c = (char *) circ_peek(&q, i);
+				T *p_c = (T *) circ_peek(&q, i);
 				dbprintf("peek %2lu %c\n", i, *p_c);
 			}
 		}
@@ -161,12 +163,12 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	io_smart_mmap m = io_smart_mmap(argv[1], 4);
+	io_smart_mmap<uint16_t> m = io_smart_mmap<uint16_t>(argv[1], sizeof(uint16_t), 4);
 
 	for (int j=0; j<5; j++) {
 		printf("Iteration %d\n", j);
 
-		for (io_smart_mmap::iterator it = m.begin();
+		for (io_smart_mmap<uint16_t>::iterator it = m.begin();
 		     it != m.end();
 		     it++)
 		{
