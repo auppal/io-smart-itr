@@ -34,9 +34,9 @@ protected:
 public:
 	int read_cnt = 0;
 
-	io_smart_mmap(const char *path, size_t cache_capacity)
+	io_smart_mmap(const char *path, size_t cache_capacity, size_t cache_overlap = 0)
 		: cache_capacity(cache_capacity),
-		  cache_overlap(cache_capacity)
+		  cache_overlap(cache_capacity - cache_overlap)
 		  
 		{
 			fd = open(path, O_RDONLY);
@@ -156,7 +156,6 @@ public:
 
 int main(int argc, char *argv[])
 {
-
 	if (argc < 2) {
 		fprintf(stderr, "Usage: prog filename\n");
 		return 1;
@@ -171,8 +170,10 @@ int main(int argc, char *argv[])
 		     it != m.end();
 		     it++)
 		{
-			std::cout << *it << std::endl;
+			std::cout << *it << ' ';
 		}
+
+		std::cout << std::endl;
 
 		m.printq();
 		printf("\n");
