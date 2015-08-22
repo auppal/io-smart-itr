@@ -189,11 +189,7 @@ public:
 			{
 				if (cnt < m->n_elms - m->cache_overlap) {
 					T c;
-#if 0
-					if (circ_deq(&m->q, &c) < 0) {
-						throw std::system_error(errno, std::system_category());
-					}
-#else
+
 					m->wait_on_q();
 
 					pthread_mutex_lock(&m->q_lock);
@@ -204,7 +200,7 @@ public:
 					}
 
 					pthread_mutex_unlock(&m->q_lock);
-#endif
+
 					//dbprintf("dequed %c\n", &c[0]);
 					m->head_idx = (m->head_idx + 1) % m->n_elms;
 					dbprintf("head_idx = %d\n", m->head_idx);
@@ -216,7 +212,6 @@ public:
 
 				iterator it(cnt, m);
 				cnt++;
-				printf("cnt = %d\n", cnt);
 				return it;
 			}
 		bool operator==(const iterator &it)
@@ -230,11 +225,6 @@ public:
 		T operator *()
 			{
 				m->wait_on_q(m->head_offset + 1);
-
-#if 0
-				printf("about to peek, queue cnt is %d head_offset is %d\n",
-				       m->q.count, m->head_offset);
-#endif
 
 				pthread_mutex_lock(&m->q_lock);
 
@@ -274,16 +264,6 @@ public:
 		}
 	void fill_next()
 		{
-#if 0
-			T c;
-
-			if (pread(fd, &c, 1 * sizeof(T), tail_idx * sizeof(T)) < 0) {
-				throw std::system_error(errno, std::system_category());
-			}
-
-			read_cnt++;
-			circ_enq(&q, &c);
-#else
 			struct pread_req req;
 			req.fd = fd;
 			req.size = 1 * sizeof(T);
@@ -302,8 +282,7 @@ public:
 
 			pthread_cond_signal(io_q_cond);
 			pthread_mutex_unlock(io_q_lock);
-			//sem_wait(&sem);
-#endif
+
 			read_cnt++;
 			tail_idx = (tail_idx + 1) % n_elms;
 		}
@@ -358,7 +337,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "error creating thread\n");
 	}
 
-	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 40,
+	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 4,
 						    &req_queue, &req_queue_lock, &req_condition);
 
 	for (int j=0; j<7; j++) {
@@ -369,8 +348,9 @@ int main(int argc, char *argv[])
 		     it++)
 		{
 			char c = *it;
+			int idx = it.idx();
 #if 1
-			printf("%c ", c);
+			printf("%c (%2d)  ", c, idx);
 #else
 			std::cout << c << ' ';
 #endif
