@@ -22,6 +22,7 @@ protected:
 	int fd = -1;
 	int head_idx = 0;
 	int tail_idx = 0;
+	int head_offset = 0;
 
 public:
 	io_smart_mmap(const char *path, size_t cache_capacity)
@@ -63,16 +64,20 @@ public:
 			}
 		const iterator operator++(int) /* postincrement */
 			{
-				char c;
+				if (cnt < m->n_elms - m->cache_capacity) {
+					char c;
 
-				if (circ_deq(&m->q, &c) < 0) {
-					throw std::system_error(errno, std::system_category());
+					if (circ_deq(&m->q, &c) < 0) {
+						throw std::system_error(errno, std::system_category());
+					}
+					printf("dequed %c\n", c);
+					m->head_idx = (m->head_idx + 1) % m->n_elms;
+					printf("head_idx = %d\n", m->head_idx);
+					m->fill_next();
 				}
-				m->head_idx = (m->head_idx + 1) % m->n_elms;
-
-				printf("dequed %c, head_idx = %d\n", c, m->head_idx);
-
-				m->fill_next();
+				else {
+					m->head_offset++;
+				}
 
 				iterator it(cnt, m);
 				cnt++;
@@ -88,9 +93,9 @@ public:
 			}
 		char operator *()
 			{
-				char *p_c = (char *) circ_peek(&m->q, 0);
+				char *p_c = (char *) circ_peek(&m->q, m->head_offset);
 
-				printf("read elm %2d, c = %c, cnt = %d\n", m->head_idx, *p_c, m->q.count);
+				printf("read elm %2d, c = %c, cnt = %d\n", (m->head_idx + m->head_offset), *p_c, m->q.count);
 				return *p_c;
 			}
 	private:
@@ -117,6 +122,7 @@ public:
 		}
 	iterator begin()
 		{
+			head_offset = 0;
 			return iterator(0, this);
 		}
 	iterator end()
