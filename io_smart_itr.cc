@@ -1,4 +1,4 @@
-/* IO-aware memory-mapped array itertor.
+/* IO-aware memory-mapped array iterator.
  * Copyright (C) 2015 Ahsen Uppal
  * This program can be distributed under the terms
  * of the GNU GENERAL PUBLIC LICENSE, Version 3.
