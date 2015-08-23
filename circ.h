@@ -1,6 +1,7 @@
 /* Simple circular buffer.
  * Copyright (C) 2015 Ahsen Uppal
- * This program can be distributed under the terms of the GNU GPL.
+ * This program can be distributed under the terms
+ * of the GNU GENERAL PUBLIC LICENSE, Version 3.
  * See the file LICENSE.
  */
 
