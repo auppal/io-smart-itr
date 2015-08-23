@@ -1,5 +1,12 @@
-// See:
-// https://gist.github.com/jeetsukumaran/307264
+/* IO-aware memory-mapped array itertor.
+ * Copyright (C) 2015 Ahsen Uppal
+ * This program can be distributed under the terms of the GNU GPL.
+ * See the file LICENSE.
+ */
+
+/* For an example of a simple c++ iterator, see:
+ * https://gist.github.com/jeetsukumaran/307264
+ */
 
 #include <system_error>
 #include <iterator>
@@ -249,9 +256,6 @@ public:
 			for (int i=0; i<cache_capacity; i++) {
 				fill_next();
 			}
-
-			dbprintf("Prefilled\n");
-			printq();
 		}
 	void wait_on_q(int count = 1)
 		{
@@ -338,7 +342,7 @@ int main(int argc, char *argv[])
 	}
 
 	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 4,
-						    &req_queue, &req_queue_lock, &req_condition);
+						    &req_queue, &req_queue_lock, &req_condition, 4);
 
 	for (int j=0; j<7; j++) {
 		printf("Iteration %d\n", j);
@@ -349,18 +353,10 @@ int main(int argc, char *argv[])
 		{
 			char c = *it;
 			int idx = it.idx();
-#if 1
 			printf("%c (%2d)  ", c, idx);
-#else
-			std::cout << c << ' ';
-#endif
 		}
 
-		m.printq();
 		printf("\n");
-#if 0
-		std::cout << std::endl;
-#endif
 	}
 
 	printf("read_cnt = %d\n", m.read_cnt);

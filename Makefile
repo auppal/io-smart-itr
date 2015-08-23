@@ -1,5 +1,11 @@
+# Auto-dependency Makefile
+# Copyright (C) 2015 Ahsen Uppal
+# This program can be distributed under the terms of the GNU GPL.
+# See the file LICENSE.
+
+
 PROG:=$(notdir $(CURDIR))
-CFLAGS+=-Wall -g -Og
+CFLAGS+=-Wall -g -O0
 
 # See:
 # http://scottmcpeak.com/autodepend/autodepend.html
@@ -9,7 +15,7 @@ CXXFLAGS+=$(CFLAGS)
 SRC:=$(wildcard *.c) $(wildcard *.cc)
 
 # extra libs for link stage, also see $(LOADLIBES), $(LDLIBS)
-LDFLAGS+=-lstdc++
+LDFLAGS+=-lstdc++ -lpthread
 LDLIBS+=
 # include directives are pre-processor related, so they should be in CPPFLAGS
 CPPFLAGS+=
