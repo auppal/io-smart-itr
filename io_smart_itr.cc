@@ -309,23 +309,22 @@ public:
 		}
 };
 
-int main(int argc, char *argv[])
+
+pthread_t thread;
+pthread_cond_t req_condition;
+pthread_mutex_t req_queue_lock;
+circ_buf_t req_queue;
+
+int io_init(const char *path)
 {
-	if (argc < 2) {
-		fprintf(stderr, "Usage: prog filename\n");
-		return 1;
-	}
-
-	pthread_cond_t req_condition;
-	pthread_mutex_t req_queue_lock;
-	circ_buf_t req_queue;
-
 	if (pthread_cond_init(&req_condition, NULL)) {
 		perror("pthread_cond_init");
+		return -1;
 	}
+
 	if (pthread_mutex_init(&req_queue_lock, NULL)) {
 		perror("pthread_mutex_init");
-		return 1;
+		return -1;
 	}
 
 	circ_init(&req_queue, 100, sizeof(struct pread_req));
@@ -336,11 +335,42 @@ int main(int argc, char *argv[])
 		.req_queue = &req_queue,
 	};
 
-	pthread_t thread;
-
 	if (pthread_create(&thread, NULL, io_thread, &args) < 0) {
-		fprintf(stderr, "error creating thread\n");
+		perror("pthread_create");
+		return -1;
 	}
+
+	return 0;
+}
+
+int io_term()
+{
+	struct pread_req exit_req;
+	exit_req.exit_flag = 1;
+
+	pthread_mutex_lock(&req_queue_lock);
+
+	while (circ_enq(&req_queue, &exit_req) < 0) {
+		sleep(1);
+	}
+	pthread_cond_signal(&req_condition);
+	pthread_mutex_unlock(&req_queue_lock);
+
+	pthread_join(thread, NULL);
+
+	circ_free(&req_queue);
+	return 0;
+}
+
+
+int main(int argc, char *argv[])
+{
+	if (argc < 2) {
+		fprintf(stderr, "Usage: prog filename\n");
+		return 1;
+	}
+
+	io_init(argv[1]);
 
 	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 4,
 						    &req_queue, &req_queue_lock, &req_condition, 4);
@@ -362,20 +392,7 @@ int main(int argc, char *argv[])
 
 	printf("read_cnt = %d\n", m.read_cnt);
 
-	struct pread_req exit_req;
-	exit_req.exit_flag = 1,
-
-	pthread_mutex_lock(&req_queue_lock);
-
-	while (circ_enq(&req_queue, &exit_req) < 0) {
-		sleep(1);
-	}
-	pthread_cond_signal(&req_condition);
-	pthread_mutex_unlock(&req_queue_lock);
-
-	pthread_join(thread, NULL);
-
-	circ_free(&req_queue);
+	io_term();
 
 	return 0;
 }
