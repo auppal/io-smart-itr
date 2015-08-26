@@ -336,19 +336,16 @@ private:
 	int io_thread_init()
 	{
 		if (pthread_cond_init(&req_condition, NULL)) {
-			perror("pthread_cond_init");
 			return -1;
 		}
 
 		if (pthread_mutex_init(&req_queue_lock, NULL)) {
-			perror("pthread_mutex_init");
 			return -1;
 		}
 
 		circ_init(&req_queue, 100, sizeof(struct pread_req));
 
 		if (pthread_create(&thread, NULL, io_thread, &args) < 0) {
-			perror("pthread_create");
 			return -1;
 		}
 
