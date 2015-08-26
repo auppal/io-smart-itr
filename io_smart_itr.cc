@@ -21,6 +21,7 @@
 #include <semaphore.h>
 #include <pthread.h>
 #include <assert.h>
+#include <string.h> /* memcpy */
 
 #include "circ.h"
 #include "dbprintf.h"
@@ -138,20 +139,39 @@ protected:
 	int tail_idx = 0;
 	int head_offset = 0;
 
+
+	pthread_t thread;
+	pthread_cond_t req_condition;
+	pthread_mutex_t req_queue_lock;
+	circ_buf_t req_queue;
+
+	struct io_thread_args args = {
+		.req_cond = &req_condition,
+		.req_queue_lock = &req_queue_lock,
+		.req_queue = &req_queue,
+	};
+
 public:
 	int read_cnt = 0;
+	size_t get_n_elms()
+		{
+			return n_elms;
+		}
 
-	io_smart_mmap(const char *path, size_t cache_capacity,
-		      circ_buf_t *io_q,
-		      pthread_mutex_t *io_q_lock,
-		      pthread_cond_t *io_q_cond,
+	io_smart_mmap(const char *path,
+		      size_t cache_capacity,
 		      size_t cache_overlap = 0)
 		: cache_capacity(cache_capacity),
-		  io_q(io_q),
-		  io_q_lock(io_q_lock),
-		  io_q_cond(io_q_cond),
 		  cache_overlap(cache_capacity - cache_overlap)
 		{
+			if (io_thread_init() < 0) {
+				throw std::system_error(errno, std::system_category());
+			}
+
+			io_q = &req_queue;
+			io_q_lock = &req_queue_lock;
+			io_q_cond = &req_condition;
+
 			fd = open(path, O_RDONLY);
 			if (fd < 0) {
 				throw std::system_error(errno, std::system_category());
@@ -180,6 +200,7 @@ public:
 		}
 	~io_smart_mmap()
 		{
+			io_thread_term();
 			circ_free(&q);
 		}
 	class iterator
@@ -192,6 +213,10 @@ public:
 		iterator &operator++() /* preincrement */
 			{
 				abort();
+			}
+		const iterator next()
+			{
+				return this->operator++(0);
 			}
 		const iterator operator++(int) /* postincrement */
 			{
@@ -307,61 +332,48 @@ public:
 				dbprintf("peek %2lu %c\n", i, *p_c);
 			}
 		}
+private:
+	int io_thread_init()
+	{
+		if (pthread_cond_init(&req_condition, NULL)) {
+			perror("pthread_cond_init");
+			return -1;
+		}
+
+		if (pthread_mutex_init(&req_queue_lock, NULL)) {
+			perror("pthread_mutex_init");
+			return -1;
+		}
+
+		circ_init(&req_queue, 100, sizeof(struct pread_req));
+
+		if (pthread_create(&thread, NULL, io_thread, &args) < 0) {
+			perror("pthread_create");
+			return -1;
+		}
+
+		return 0;
+	}
+
+	int io_thread_term()
+	{
+		struct pread_req exit_req;
+		exit_req.exit_flag = 1;
+
+		pthread_mutex_lock(&req_queue_lock);
+
+		while (circ_enq(&req_queue, &exit_req) < 0) {
+			sleep(1);
+		}
+		pthread_cond_signal(&req_condition);
+		pthread_mutex_unlock(&req_queue_lock);
+
+		pthread_join(thread, NULL);
+
+		circ_free(&req_queue);
+		return 0;
+	}
 };
-
-
-pthread_t thread;
-pthread_cond_t req_condition;
-pthread_mutex_t req_queue_lock;
-circ_buf_t req_queue;
-
-int io_init(const char *path)
-{
-	if (pthread_cond_init(&req_condition, NULL)) {
-		perror("pthread_cond_init");
-		return -1;
-	}
-
-	if (pthread_mutex_init(&req_queue_lock, NULL)) {
-		perror("pthread_mutex_init");
-		return -1;
-	}
-
-	circ_init(&req_queue, 100, sizeof(struct pread_req));
-
-	struct io_thread_args args = {
-		.req_cond = &req_condition,
-		.req_queue_lock = &req_queue_lock,
-		.req_queue = &req_queue,
-	};
-
-	if (pthread_create(&thread, NULL, io_thread, &args) < 0) {
-		perror("pthread_create");
-		return -1;
-	}
-
-	return 0;
-}
-
-int io_term()
-{
-	struct pread_req exit_req;
-	exit_req.exit_flag = 1;
-
-	pthread_mutex_lock(&req_queue_lock);
-
-	while (circ_enq(&req_queue, &exit_req) < 0) {
-		sleep(1);
-	}
-	pthread_cond_signal(&req_condition);
-	pthread_mutex_unlock(&req_queue_lock);
-
-	pthread_join(thread, NULL);
-
-	circ_free(&req_queue);
-	return 0;
-}
-
 
 int main(int argc, char *argv[])
 {
@@ -370,10 +382,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	io_init(argv[1]);
-
-	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 4,
-						    &req_queue, &req_queue_lock, &req_condition, 4);
+	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 4, 0);
 
 	for (int j=0; j<7; j++) {
 		printf("Iteration %d\n", j);
@@ -391,8 +400,6 @@ int main(int argc, char *argv[])
 	}
 
 	printf("read_cnt = %d\n", m.read_cnt);
-
-	io_term();
 
 	return 0;
 }
