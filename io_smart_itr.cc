@@ -122,9 +122,6 @@ class io_smart_mmap
 protected:
 	int cache_capacity;
 	size_t object_size;
-	circ_buf_t *io_q;
-	pthread_mutex_t *io_q_lock;
-	pthread_cond_t *io_q_cond;
 	/* How many elements to keep in the cache
 	 * across iterations.
 	 */
@@ -142,16 +139,11 @@ protected:
 
 
 	pthread_t thread;
-	pthread_cond_t req_condition;
-	pthread_mutex_t req_queue_lock;
-	circ_buf_t req_queue;
+	pthread_cond_t io_queue_cond;
+	pthread_mutex_t io_queue_lock;
+	circ_buf_t io_queue;
 
-	struct io_thread_args args = {
-		.req_cond = &req_condition,
-		.req_queue_lock = &req_queue_lock,
-		.req_queue = &req_queue,
-	};
-
+	struct io_thread_args args;
 public:
 	int read_cnt = 0;
 	size_t get_n_elms()
@@ -170,10 +162,6 @@ public:
 			if (io_thread_init() < 0) {
 				throw std::system_error(errno, std::system_category());
 			}
-
-			io_q = &req_queue;
-			io_q_lock = &req_queue_lock;
-			io_q_cond = &req_condition;
 
 			fd = open(path, O_RDONLY);
 			if (fd < 0) {
@@ -303,15 +291,15 @@ public:
 			req.resp_q_lock = &q_lock;
 			req.resp_q_cond = &q_cond;
 
-			pthread_mutex_lock(io_q_lock);
+			pthread_mutex_lock(&io_queue_lock);
 
-			if (circ_enq(io_q, &req)) {
-				pthread_mutex_unlock(io_q_lock);
+			if (circ_enq(&io_queue, &req)) {
+				pthread_mutex_unlock(&io_queue_lock);
 				throw std::system_error(EBUSY, std::system_category());
 			}
 
-			pthread_cond_signal(io_q_cond);
-			pthread_mutex_unlock(io_q_lock);
+			pthread_cond_signal(&io_queue_cond);
+			pthread_mutex_unlock(&io_queue_lock);
 
 			read_cnt++;
 			tail_idx = (tail_idx + 1) % n_elms;
@@ -328,15 +316,19 @@ public:
 private:
 	int io_thread_init()
 	{
-		if (pthread_cond_init(&req_condition, NULL)) {
+		if (pthread_cond_init(&io_queue_cond, NULL)) {
 			return -1;
 		}
 
-		if (pthread_mutex_init(&req_queue_lock, NULL)) {
+		if (pthread_mutex_init(&io_queue_lock, NULL)) {
 			return -1;
 		}
 
-		circ_init(&req_queue, 100, sizeof(struct pread_req));
+		circ_init(&io_queue, 100, sizeof(struct pread_req));
+
+		args.req_cond = &io_queue_cond;
+		args.req_queue_lock = &io_queue_lock;
+		args.req_queue = &io_queue;
 
 		if (pthread_create(&thread, NULL, io_thread, &args) < 0) {
 			return -1;
@@ -350,17 +342,17 @@ private:
 		struct pread_req exit_req;
 		exit_req.exit_flag = 1;
 
-		pthread_mutex_lock(&req_queue_lock);
+		pthread_mutex_lock(&io_queue_lock);
 
-		while (circ_enq(&req_queue, &exit_req) < 0) {
+		while (circ_enq(&io_queue, &exit_req) < 0) {
 			sleep(1);
 		}
-		pthread_cond_signal(&req_condition);
-		pthread_mutex_unlock(&req_queue_lock);
+		pthread_cond_signal(&io_queue_cond);
+		pthread_mutex_unlock(&io_queue_lock);
 
 		pthread_join(thread, NULL);
 
-		circ_free(&req_queue);
+		circ_free(&io_queue);
 		return 0;
 	}
 };
