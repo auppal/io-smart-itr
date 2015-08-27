@@ -116,11 +116,12 @@ static void *io_thread(void *arg)
 }
 
 
-template <typename T>
+//template <typename T>
 class io_smart_mmap
 {
 protected:
 	int cache_capacity;
+	size_t object_size;
 	circ_buf_t *io_q;
 	pthread_mutex_t *io_q_lock;
 	pthread_cond_t *io_q_cond;
@@ -160,8 +161,10 @@ public:
 
 	io_smart_mmap(const char *path,
 		      size_t cache_capacity,
+		      size_t object_size,
 		      size_t cache_overlap = 0)
 		: cache_capacity(cache_capacity),
+		  object_size(object_size),
 		  cache_overlap(cache_capacity - cache_overlap)
 		{
 			if (io_thread_init() < 0) {
@@ -177,7 +180,7 @@ public:
 				throw std::system_error(errno, std::system_category());
 			}
 
-			if (circ_init(&q, cache_capacity, sizeof(T)) < 0) {
+			if (circ_init(&q, cache_capacity, object_size) < 0) {
 				throw std::system_error(errno, std::system_category());
 			}
 
@@ -194,7 +197,7 @@ public:
 				throw std::system_error(errno, std::system_category());
 			}
 
-			n_elms = sbuf.st_size / sizeof(T);
+			n_elms = sbuf.st_size / object_size;
 
 			prefill();
 		}
@@ -221,13 +224,11 @@ public:
 		const iterator operator++(int) /* postincrement */
 			{
 				if (cnt < m->n_elms - m->cache_overlap) {
-					T c;
-
 					m->wait_on_q();
 
 					pthread_mutex_lock(&m->q_lock);
 
-					if (circ_deq(&m->q, &c) < 0) {
+					if (circ_deq(&m->q, NULL) < 0) {
 						printf("bogus!\n");
 						abort();
 					}
@@ -255,19 +256,18 @@ public:
 			{
 				return (cnt != it.cnt);
 			}
-		T operator *()
+		void* operator *()
 			{
 				m->wait_on_q(m->head_offset + 1);
 
 				pthread_mutex_lock(&m->q_lock);
 
-				T *p_c = (T *) circ_peek(&m->q, m->head_offset);
+				void *p_obj = (void *) circ_peek(&m->q, m->head_offset);
 
-				dbprintf("read elm %2d, c = %c, cnt = %d\n", (m->head_idx + m->head_offset), *p_c, m->q.count);
-				T c = *p_c;
+				//dbprintf("read elm %2d, c = %c, cnt = %d\n", (m->head_idx + m->head_offset), *p_c, m->q.count);
 				pthread_mutex_unlock(&m->q_lock);
 
-				return c;
+				return p_obj;
 			}
 		inline int idx()
 			{
@@ -283,7 +283,7 @@ public:
 				fill_next();
 			}
 		}
-	void wait_on_q(int count = 1)
+	void wait_on_q(size_t count = 1)
 		{
 			pthread_mutex_lock(&q_lock);
 			while (circ_cnt(&q) < count) {
@@ -296,8 +296,8 @@ public:
 		{
 			struct pread_req req;
 			req.fd = fd;
-			req.size = 1 * sizeof(T);
-			req.offset = tail_idx * sizeof(T);
+			req.size = 1 * object_size;
+			req.offset = tail_idx * object_size;
 			req.exit_flag = 0;
 			req.resp_q = &q;
 			req.resp_q_lock = &q_lock;
@@ -324,13 +324,6 @@ public:
 	iterator end()
 		{
 			return iterator(n_elms, this);
-		}
-	void printq()
-		{
-			for (size_t i=0; i<q.count; i++) {
-				T *p_c = (T *) circ_peek(&q, i);
-				dbprintf("peek %2lu %c\n", i, *p_c);
-			}
 		}
 private:
 	int io_thread_init()
@@ -379,18 +372,18 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	io_smart_mmap<char> m = io_smart_mmap<char>(argv[1], 4, 0);
+	io_smart_mmap m = io_smart_mmap(argv[1], 4, sizeof(char), 0);
 
 	for (int j=0; j<7; j++) {
 		printf("Iteration %d\n", j);
 
-		for (io_smart_mmap<char>::iterator it = m.begin();
+		for (io_smart_mmap::iterator it = m.begin();
 		     it != m.end();
 		     it++)
 		{
-			char c = *it;
+			char *p_c = (char *) *it;
 			int idx = it.idx();
-			printf("%c (%2d)  ", c, idx);
+			printf("%c (%2d)  ", *p_c, idx);
 		}
 
 		printf("\n");
