@@ -125,9 +125,9 @@ protected:
 	/* How many elements to keep in the cache
 	 * across iterations.
 	 */
-	int cache_overlap;
+	size_t cache_overlap;
 
-	int n_elms;
+	size_t n_elms;
 	circ_buf_t q;
 	pthread_cond_t q_cond;
 	pthread_mutex_t q_lock;
@@ -144,20 +144,29 @@ protected:
 	circ_buf_t io_queue;
 
 	struct io_thread_args args;
+
+	uint8_t *filter_bits;
+	size_t filter_bits_size;
+	size_t filter_bits_set_cnt;
+	ssize_t filter_bits_highest = -1;
 public:
 	int read_cnt = 0;
 	size_t get_n_elms()
 		{
 			return n_elms;
 		}
-
+	size_t get_filtered_n_elms()
+		{
+			return filter_bits_set_cnt;
+		}
 	io_smart_mmap(const char *path,
 		      size_t cache_capacity,
 		      size_t object_size,
 		      size_t cache_overlap = 0)
 		: cache_capacity(cache_capacity),
 		  object_size(object_size),
-		  cache_overlap(cache_capacity - cache_overlap)
+		  cache_overlap(cache_capacity - cache_overlap),
+		  filter_bits(0)
 		{
 			if (io_thread_init() < 0) {
 				throw std::system_error(errno, std::system_category());
@@ -197,7 +206,7 @@ public:
 	class iterator
 	{
 	public:
-		iterator (int cnt, class io_smart_mmap *m)
+		iterator (size_t cnt, class io_smart_mmap *m)
 			: cnt(cnt),
 			  m(m)
 			{}
@@ -264,10 +273,10 @@ public:
 			}
 		inline int idx()
 			{
-				return m->head_idx + m->head_offset;
+				return (m->head_idx + m->head_offset) % m->n_elms;
 			}
 	private:
-		int cnt;
+		size_t cnt;
 		class io_smart_mmap *m;
 	};
 	void prefill()
@@ -317,6 +326,40 @@ public:
 	iterator end()
 		{
 			return iterator(n_elms, this);
+		}
+	/* Set 1-bit ignore filter for each page in this
+	 * mapping.
+	 */
+	void set_filter(const uint8_t *filter_bits,
+			size_t filter_bits_size_bytes)
+		{
+			void *p = realloc(this->filter_bits, filter_bits_size_bytes);
+
+			if (!p) {
+				throw std::system_error(errno, std::system_category());
+			}
+
+			this->filter_bits = (uint8_t *) p;
+			memcpy(this->filter_bits, filter_bits, filter_bits_size_bytes);
+
+			ssize_t highest_bit = -1;
+			size_t cnt = 0;
+			size_t i, j;
+			for (i=0; i<filter_bits_size_bytes; i++) {
+				for (j=0; j<8; j++) {
+
+					if (8 * i + j >= n_elms)
+						break;
+
+					if (filter_bits[i] & (1 << j)) {
+						cnt++;
+						highest_bit = 8 * i + j;
+					}
+				}
+			}
+
+			filter_bits_highest = highest_bit;
+			filter_bits_set_cnt = cnt;
 		}
 private:
 	int io_thread_init()
@@ -385,6 +428,23 @@ int main(int argc, char *argv[])
 
 		printf("\n");
 	}
+
+	printf("\n");
+
+	uint8_t filter[] = { 0xa, 0xa };
+
+	//m.set_filter(filter, sizeof(filter));
+
+	for (io_smart_mmap::iterator it = m.begin();
+		     it != m.end();
+		     it++)
+		{
+			char *p_c = (char *) *it;
+			int idx = it.idx();
+			printf("%c (%2d)  ", *p_c, idx);
+		}
+
+		printf("\n");
 
 	printf("read_cnt = %d\n", m.read_cnt);
 
