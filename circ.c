@@ -26,6 +26,15 @@ int circ_init(circ_buf_t *b, unsigned int len, unsigned int size)
 	return 0;
 }
 
+int circ_clear(circ_buf_t *b)
+{
+	b->tail = 0;
+	b->head = 0;
+	b->count = 0;
+
+	return 0;
+}
+
 int circ_enq(circ_buf_t *b, const void *elm)
 {
 	int tail = (b->tail + 1) % b->len;
@@ -62,6 +71,26 @@ const void *circ_peek(circ_buf_t *b, int index)
 
 	int i = (b->head + index) % b->len;
 	return &b->buf[i * b->size];
+}
+
+void circ_del(circ_buf_t *b, int index)
+{
+	int i;
+	//printf("del index = %d\n", index);
+
+	for (i =(b->head + index) % b->len;
+	     i!=(b->tail - 1) % b->len;
+	     i = (i + 1) % b->len)
+	{
+		//printf("memcpy %d\n", i);
+		memcpy(&b->buf[i * b->size],
+		       &b->buf[((i + 1) % b->len) * b->size],
+		       b->size);
+	}
+	if (b->count > 0) {
+		b->count--;
+		b->tail = (b->tail - 1) % b->len;
+	}
 }
 
 unsigned int circ_cnt(circ_buf_t *b)
