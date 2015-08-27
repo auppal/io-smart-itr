@@ -214,6 +214,11 @@ public:
 				if (cnt < m->n_elms - m->cache_overlap) {
 					m->wait_on_q();
 
+					/* Discard the current head
+					 * and fill the next element
+					 * from the tail.
+					 */
+
 					pthread_mutex_lock(&m->q_lock);
 
 					if (circ_deq(&m->q, NULL) < 0) {
